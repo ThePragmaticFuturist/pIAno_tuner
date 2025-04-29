@@ -686,3 +686,75 @@ Here's a breakdown of the thought process to generate the Python script for crea
 **(Self-Correction during thought process):** Initially, I might have thought of just making one giant API call per PDF. That's bad because of context limits and potential API timeouts. Chunking is essential. Also, relying *only* on `response_format={"type": "json_object"}` might fail if the model doesn't fully comply. Adding a `try-except` block around `json.loads()` is crucial. JSON Lines is better than a single large JSON list for output. Using `pypdf` is better than the older `PyPDF2`.
 
 By following these steps, combining necessary libraries, structuring the code logically, and adding essential features like error handling and configuration, we arrive at the provided Python script.
+
+```update the create_finetune_data.py script to include import of .docx and .csv files in addition to the .pdf```
+
+Here's a breakdown of the thought process to update the `create_finetune_data.py` script to handle `.docx` and `.csv` files:
+
+1.  **Understand the Goal:** The user wants to extend the existing PDF processing script to also read text content from Microsoft Word (`.docx`) and Comma Separated Value (`.csv`) files listed in the `pdf_sources.txt` file (which might need renaming, but we'll keep it for now). The core logic of chunking and generating training data via an LLM should remain the same.
+
+2.  **Identify Necessary Libraries:**
+    *   For `.docx`: The standard library is `python-docx`.
+    *   For `.csv`: Python's built-in `csv` module is sufficient.
+
+3.  **Modify Installation Instructions:** Update the `pip install` command in the prerequisites to include `python-docx`. The `csv` module is built-in, so no installation is needed.
+
+4.  **Adapt File Handling Logic:**
+    *   The main loop iterates through `sources` read from the `SOURCE_FILE`.
+    *   Inside the loop, currently, it checks if the source is a URL (downloads PDF) or a local path (assumes PDF).
+    *   Need to add logic to *determine the file type* based on the extension (for local files) or potentially the content-type header (for URLs, though this adds complexity and might not be reliable for direct `.docx`/`.csv` URLs - simpler to handle local files first).
+    *   Refactor the text extraction part into separate functions for each file type (`extract_text_from_pdf`, `extract_text_from_docx`, `extract_text_from_csv`).
+
+5.  **Implement `.docx` Extraction:**
+    *   Create a function `extract_text_from_docx(docx_path)`.
+    *   Import the `docx` library (`import docx`).
+    *   Inside the function:
+        *   Open the `.docx` file using `docx.Document(docx_path)`.
+        *   Iterate through the `paragraphs` attribute of the `Document` object.
+        *   Extract the `text` from each paragraph.
+        *   Join the paragraph texts, perhaps with a newline (`\n`) or space (` `) in between. Using space might be better to avoid artificial sentence breaks within paragraphs.
+        *   Include error handling (`try...except`) for potential issues opening or reading the file.
+        *   Log success or failure.
+
+6.  **Implement `.csv` Extraction:**
+    *   Create a function `extract_text_from_csv(csv_path)`.
+    *   Import the `csv` module (`import csv`).
+    *   Inside the function:
+        *   Decide *how* to represent CSV data as text. Several options:
+            *   Concatenate all cells row by row: Simple, but loses structure.
+            *   Format each row as a sentence: "Row X: column1 is value1, column2 is value2...". Better context but can be verbose.
+            *   Process specific columns: If the user knows relevant columns, target those. This requires more configuration.
+            *   *Decision:* Let's start with the simplest approach: concatenate all cells, separated by spaces or commas, with newlines between rows. This captures the data, although the LLM might struggle without more explicit structure. Acknowledge this limitation in comments.
+        *   Open the CSV file using `with open(csv_path, 'r', newline='', encoding='utf-8') as f:`. Handle potential encoding errors (`encoding='utf-8', errors='ignore'`).
+        *   Use `csv.reader(f)` to iterate through rows.
+        *   For each row, join the cells (which are strings) using a separator (e.g., ", ").
+        *   Join all row strings with a newline (`\n`).
+        *   Include `try...except` for file errors or CSV parsing errors.
+        *   Log success or failure.
+
+7.  **Modify the Main Loop (`main` function):**
+    *   Rename `pdf_sources.txt` to something more general like `source_files.txt` (update `SOURCE_FILE` constant). Update documentation/instructions.
+    *   Inside the loop iterating through `sources`:
+        *   Handle URLs: Currently, it only downloads PDFs. It *could* try to download `.docx`/`.csv`, but it's simpler and more common to process local files. Let's focus the update on local file handling first. Add a check: if it's a URL, maybe *only* try downloading if it ends with `.pdf` or skip non-PDF URLs for now, logging a warning. *Self-correction:* Downloading non-PDFs is reasonable. We just need to check the *downloaded* file's type or assume based on the URL ending if reliable. Let's keep the download logic but add extension checking *after* download for temp files.
+        *   Handle Local Files:
+            *   Get the file extension using `os.path.splitext(source)[1].lower()`.
+            *   Use `if/elif/else` block:
+                *   `if extension == '.pdf':` call `extract_text_from_pdf`.
+                *   `elif extension == '.docx':` call `extract_text_from_docx`.
+                *   `elif extension == '.csv':` call `extract_text_from_csv`.
+                *   `else:` log a warning about unsupported file type.
+        *   Assign the result of the extraction function to `extracted_text`.
+        *   The rest of the logic (chunking, generating pairs) remains the same, operating on `extracted_text`.
+    *   Handle Temporary Files: When downloading from a URL, the current code assumes it's a PDF. We need to either check the URL ending *before* downloading (less reliable) or check the downloaded temporary file's name/content-type *after* downloading. Checking the suffix of the temp file name (if we preserve it or infer it) is easiest. Modify the download part to maybe try and infer the extension from the URL for the temp file name, or just attempt PDF extraction and add error handling if it fails. *Refinement:* Let's modify the download logic slightly. Check URL ending first. If it's `.pdf`, `.docx`, `.csv`, download. *After* download, use the *original* URL ending (or the temp file's name if we saved it appropriately) to decide which extractor to call.
+
+8.  **Refine Download and Temp File Handling:**
+    *   Modify `download_pdf` to be more general `download_file`.
+    *   In the main loop, check URL ending.
+    *   When creating the `tempfile.NamedTemporaryFile`, try to use the correct suffix (e.g., `.docx`).
+    *   After successful download, determine the correct extractor based on the *original* URL's suffix or the temp file's suffix.
+
+9.  **Update Docstrings and Logging:** Ensure all new functions have docstrings and appropriate logging messages (info, warning, error). Update the main script description and usage instructions.
+
+10. **Review and Test:** Read through the complete script. Consider edge cases: empty files, corrupted files, very large files (potential memory issues with reading whole CSVs/DOCXs at once - mention this as a limitation), files with weird encoding. Log clearly when skipping files or encountering errors. Mentally trace the logic for local PDFs, DOCXs, CSVs, and URL handling.
+
+This structured approach ensures all requirements are addressed, necessary libraries are included, error handling is considered, and the core generation logic is reused effectively.
